@@ -220,6 +220,7 @@ class Registry(Handler):
         schema1_converter = Schema2toSchema1ConverterWrapper(tag, accepted_media_types, path)
         try:
             schema, converted, digest = schema1_converter.convert()
+            raise Exception("TRIGGER ME!!!")
         except RuntimeError:
             raise PathNotResolved(tag.name)
         response_headers = {

@@ -20,8 +20,9 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 
 from pulpcore.plugin.models import Artifact, ContentArtifact
-from rest_framework.exceptions import MethodNotAllowed, ParseError, ValidationError
-from rest_framework.renderers import BaseRenderer
+from rest_framework.exceptions import MethodNotAllowed, NotAcceptable, ParseError, ValidationError
+from rest_framework.negotiation import DefaultContentNegotiation
+from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 from rest_framework.views import APIView
@@ -29,22 +30,256 @@ from rest_framework.views import APIView
 from pulp_container.app import models, serializers
 from pulp_container.app.authorization import AuthorizationService
 from pulp_container.app.token_verification import TokenAuthentication, TokenPermission
+from pulp_container.constants import MEDIA_TYPE
 
 
 log = logging.getLogger(__name__)
 
 
-class ManifestRenderer(BaseRenderer):
+def get_drv_pull(path):
     """
-    Rendered class for rendering Manifest responses.
+    Get distribution, repository and repository_version for pull access.
+    """
+    distribution = get_object_or_404(models.ContainerDistribution, base_path=path)
+    if distribution.repository:
+        repository_version = distribution.repository.latest_version()
+    elif distribution.repository_version:
+        repository_version = distribution.repository_version
+    else:
+        raise Http404("Repository {} does not exist.".format(path))
+    return distribution, distribution.repository, repository_version
+
+
+def get_dr_push(request, path, create=False):
+    """
+    Get distribution and repository for push access.
+
+    Optionally create them if not found.
+    """
+    try:
+        distribution = models.ContainerDistribution.objects.get(base_path=path)
+    except models.ContainerDistribution.DoesNotExist:
+        if create:
+            try:
+                with transaction.atomic():
+                    repo_serializer = serializers.ContainerPushRepositorySerializer(
+                        data={"name": path}, context={"request": request},
+                    )
+                    repo_serializer.is_valid(raise_exception=True)
+                    repository = repo_serializer.create(repo_serializer.validated_data)
+                    repo_href = serializers.ContainerPushRepositorySerializer(
+                        repository, context={"request": request},
+                    ).data["pulp_href"]
+
+                    dist_serializer = serializers.ContainerDistributionSerializer(
+                        data={"base_path": path, "name": path, "repository": repo_href}
+                    )
+                    dist_serializer.is_valid(raise_exception=True)
+                    distribution = dist_serializer.create(dist_serializer.validated_data)
+            except ValidationError:
+                ParseError("Attempt to create repository failed.")
+        else:
+            raise Http404("Repository {} does not exist.".format(path))
+    else:
+        repository = distribution.repository
+        if repository:
+            repository = repository.cast()
+            if not repository.PUSH_ENABLED:
+                raise MethodNotAllowed(
+                    request.method, detail="Repository {} is read-only.".format(path)
+                )
+        else:
+            raise Http404("Repository {} does not exist.".format(path))
+    return distribution, repository
+
+
+class ManifestV1Renderer(BaseRenderer):
+    """
+    Renderer class for rendering Manifest V1 responses.
     """
 
-    media_type = "*/*"
-    format = "txt"
+    media_type = MEDIA_TYPE.MANIFEST_V1
+    format = "manifest_v1"
 
     def render(self, data, accepted_media_type=None, renderer_context=None):
         """Encodes the response data."""
         return data
+
+
+class ManifestV1SignedRenderer(BaseRenderer):
+    """
+    Renderer class for rendering Manifest V1 Signed responses.
+    """
+
+    media_type = MEDIA_TYPE.MANIFEST_V1_SIGNED
+    format = "manifest_v1_signed"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """Encodes the response data."""
+        return data
+
+
+class ManifestV2Renderer(BaseRenderer):
+    """
+    Renderer class for rendering Manifest V2 responses.
+    """
+
+    media_type = MEDIA_TYPE.MANIFEST_V2
+    format = "manifest_v2"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """Encodes the response data."""
+        return data
+
+
+class ManifestListRenderer(BaseRenderer):
+    """
+    Renderer class for rendering Manifest List responses.
+    """
+
+    media_type = MEDIA_TYPE.MANIFEST_LIST
+    format = "manifest_list"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """Encodes the response data."""
+        return data
+
+
+class ConfigBlobRenderer(BaseRenderer):
+    """
+    Renderer class for rendering Config Blob responses.
+    """
+
+    media_type = MEDIA_TYPE.CONFIG_BLOB
+    format = "config_blob"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """Encodes the response data."""
+        return data
+
+
+class RegularBlobRenderer(BaseRenderer):
+    """
+    Renderer class for rendering Regular Blob responses.
+    """
+
+    media_type = MEDIA_TYPE.REGULAR_BLOB
+    format = "regular_blob"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """Encodes the response data."""
+        return data
+
+
+class ForeignBlobRenderer(BaseRenderer):
+    """
+    Renderer class for rendering Foreign Blob responses.
+    """
+
+    media_type = MEDIA_TYPE.FOREIGN_BLOB
+    format = "foreign_blob"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """Encodes the response data."""
+        return data
+
+
+class ManifestOCIRenderer(BaseRenderer):
+    """
+    Renderer class for rendering OCI Manifest responses.
+    """
+
+    media_type = MEDIA_TYPE.MANIFEST_OCI
+    format = "manifest_oci"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """Encodes the response data."""
+        return data
+
+
+class IndexOCIRenderer(BaseRenderer):
+    """
+    Renderer class for rendering OCI Index responses.
+    """
+
+    media_type = MEDIA_TYPE.INDEX_OCI
+    format = "index_oci"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """Encodes the response data."""
+        return data
+
+
+class ConfigBlobOCIRenderer(BaseRenderer):
+    """
+    Renderer class for rendering OCI Config Blob responses.
+    """
+
+    media_type = MEDIA_TYPE.CONFIG_BLOB_OCI
+    format = "config_blob_oci"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """Encodes the response data."""
+        return data
+
+
+class RegularBlobOCIRenderer(BaseRenderer):
+    """
+    Renderer class for rendering OCI Regular Blob responses.
+    """
+
+    media_type = MEDIA_TYPE.REGULAR_BLOB_OCI
+    format = "regular_blob_oci"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """Encodes the response data."""
+        return data
+
+
+class ForeignBlobOCIRenderer(BaseRenderer):
+    """
+    Renderer class for rendering OCI Foreign Blob responses.
+    """
+
+    media_type = MEDIA_TYPE.FOREIGN_BLOB_OCI
+    format = "foreign_blob_oci"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        """Encodes the response data."""
+        return data
+
+
+class ManifestContentNegotiation(DefaultContentNegotiation):
+    """
+    Content negotiation class for manifests.
+    """
+
+    def select_renderer(self, request, renderers, format_suffix):
+        # Trigger authentication to prevent DoS attacs on the database
+        if request.method in ["GET", "HEAD"] and request.auth is not None and "sub" in request.auth:
+            path = request.resolver_match.kwargs["path"]
+            pk = request.resolver_match.kwargs["pk"]
+
+            _, _, repository_version = get_drv_pull(path)
+            if pk[:7] != "sha256:":
+                tag = get_object_or_404(models.Tag, name=pk, pk__in=repository_version.content)
+                manifest = tag.tagged_manifest
+            else:
+                tag = None
+                manifest = get_object_or_404(
+                    models.Manifest, digest=pk, pk__in=repository_version.content
+                )
+            media_type = manifest.media_type
+            # Reduce provided renderers to capable renderers
+            renderers = [renderer for renderer in renderers if renderer.media_type == media_type]
+            # TODO
+            # if tag:
+            #     renderers.append([renderer for renderer in renderers if renderer.can_convert_from(media_type)])
+            log.info("XOXOXOXOXOXOXOX")
+            log.info(media_type)
+            log.info(request.headers["Accept"])
+            log.info(renderers)
+        return super().select_renderer(request, renderers, format_suffix)
 
 
 class UploadResponse(Response):
@@ -140,6 +375,17 @@ class ContainerRegistryApiMixin:
     authentication_classes = [TokenAuthentication]
     permission_classes = [TokenPermission]
 
+    def get_exception_handler_context(self):
+        """
+        Retrieve the context used to construct responses for exceptions.
+        """
+        context = super().get_exception_handler_context()
+        if context["request"]:
+            context["request"].accepted_renderer = JSONRenderer()
+            context["request"].accepted_media_type = JSONRenderer.media_type
+        return context
+
+
     @property
     def default_response_headers(self):
         """
@@ -148,61 +394,6 @@ class ContainerRegistryApiMixin:
         headers = super().default_response_headers
         headers.update({"Docker-Distribution-Api-Version": "registry/2.0"})
         return headers
-
-    def get_drv_pull(self, path):
-        """
-        Get distribution, repository and repository_version for pull access.
-        """
-        distribution = get_object_or_404(models.ContainerDistribution, base_path=path)
-        if distribution.repository:
-            repository_version = distribution.repository.latest_version()
-        elif distribution.repository_version:
-            repository_version = distribution.repository_version
-        else:
-            raise Http404("Repository {} does not exist.".format(path))
-        return distribution, distribution.repository, repository_version
-
-    def get_dr_push(self, request, path, create=False):
-        """
-        Get distribution and repository for push access.
-
-        Optionally create them if not found.
-        """
-        try:
-            distribution = models.ContainerDistribution.objects.get(base_path=path)
-        except models.ContainerDistribution.DoesNotExist:
-            if create:
-                try:
-                    with transaction.atomic():
-                        repo_serializer = serializers.ContainerPushRepositorySerializer(
-                            data={"name": path}, context={"request": request},
-                        )
-                        repo_serializer.is_valid(raise_exception=True)
-                        repository = repo_serializer.create(repo_serializer.validated_data)
-                        repo_href = serializers.ContainerPushRepositorySerializer(
-                            repository, context={"request": request},
-                        ).data["pulp_href"]
-
-                        dist_serializer = serializers.ContainerDistributionSerializer(
-                            data={"base_path": path, "name": path, "repository": repo_href}
-                        )
-                        dist_serializer.is_valid(raise_exception=True)
-                        distribution = dist_serializer.create(dist_serializer.validated_data)
-                except ValidationError:
-                    ParseError("Attempt to create repository failed.")
-            else:
-                raise Http404("Repository {} does not exist.".format(path))
-        else:
-            repository = distribution.repository
-            if repository:
-                repository = repository.cast()
-                if not repository.PUSH_ENABLED:
-                    raise MethodNotAllowed(
-                        request.method, detail="Repository {} is read-only.".format(path)
-                    )
-            else:
-                raise Http404("Repository {} does not exist.".format(path))
-        return distribution, repository
 
 
 class BearerTokenView(APIView):
@@ -267,7 +458,7 @@ class TagsListView(ContainerRegistryApiMixin, APIView):
         """
         Handles GET requests to the /v2/<repo>/tags/list endpoint
         """
-        _, _, repository_version = self.get_drv_pull(path)
+        _, _, repository_version = get_drv_pull(path)
         tags = {"name": path, "tags": set()}
         for c in repository_version.content:
             c = c.cast()
@@ -291,7 +482,7 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
         """
         This methods handles the creation of an upload.
         """
-        _, repository = self.get_dr_push(request, path, create=True)
+        _, repository = get_dr_push(request, path, create=True)
 
         upload = models.Upload(repository=repository)
         upload.file.save(name="", content=ContentFile(""), save=False)
@@ -304,7 +495,7 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
         """
         This methods handles uploading of a chunk to an existing upload.
         """
-        _, repository = self.get_dr_push(request, path)
+        _, repository = get_dr_push(request, path)
         chunk = request.META["wsgi.input"]
         if "Content-Range" in request.headers or "digest" not in request.query_params:
             whole = False
@@ -338,7 +529,7 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
 
     def put(self, request, path, pk=None):
         """Handles creation of Uploads."""
-        _, repository = self.get_dr_push(request, path)
+        _, repository = get_dr_push(request, path)
 
         digest = request.query_params["digest"]
         upload = models.Upload.objects.get(pk=pk, repository=repository)
@@ -385,6 +576,15 @@ class Blobs(ContainerRegistryApiMixin, ViewSet):
     ViewSet for interacting with Blobs
     """
 
+    renderer_classes = [
+        ConfigBlobRenderer,
+        RegularBlobRenderer,
+        ForeignBlobRenderer,
+        ConfigBlobOCIRenderer,
+        RegularBlobOCIRenderer,
+        ForeignBlobOCIRenderer,
+    ]
+
     def head(self, request, path, pk=None):
         """
         Responds to HEAD requests about blobs
@@ -393,13 +593,13 @@ class Blobs(ContainerRegistryApiMixin, ViewSet):
         :param digest:
         :return:
         """
-        _, _, repository_version = self.get_drv_pull(path)
+        _, _, repository_version = get_drv_pull(path)
         blob = get_object_or_404(models.Blob, digest=pk, pk__in=repository_version.content)
         return BlobResponse(blob, path, 200, request)
 
     def get(self, request, path, pk=None):
         """Handles GET requests for Blobs."""
-        distribution, _, repository_version = self.get_drv_pull(path)
+        distribution, _, repository_version = get_drv_pull(path)
         blob = get_object_or_404(models.Blob, digest=pk, pk__in=repository_version.content)
         return distribution.redirect_to_content_app(
             "{}/pulp/container/{}/blobs/{}".format(settings.CONTENT_ORIGIN, path, blob.digest),
@@ -411,11 +611,19 @@ class Manifests(ContainerRegistryApiMixin, ViewSet):
     ViewSet for intereacting with Manifests
     """
 
-    renderer_classes = [ManifestRenderer]
+    content_negotiation_class = ManifestContentNegotiation
+    renderer_classes = [
+        ManifestV1Renderer,
+        ManifestV1SignedRenderer,
+        ManifestV2Renderer,
+        ManifestListRenderer,
+        ManifestOCIRenderer,
+        IndexOCIRenderer,
+    ]
     # The lookup regex does not allow /, ^, &, *, %, !, ~, @, #, +, =, ?
     lookup_value_regex = "[^/^&*%!~@#+=?]+"
 
-    def head(self, request, path, pk=None):
+    def head(self, request, path, pk):
         """
         Responds to HEAD requests about manifests by reference
         :param request:
@@ -423,7 +631,7 @@ class Manifests(ContainerRegistryApiMixin, ViewSet):
         :param digest:
         :return:
         """
-        _, _, repository_version = self.get_drv_pull(path)
+        _, _, repository_version = get_drv_pull(path)
         if pk[:7] != "sha256:":
             tag = get_object_or_404(models.Tag, name=pk, pk__in=repository_version.content)
             manifest = tag.tagged_manifest
@@ -434,7 +642,7 @@ class Manifests(ContainerRegistryApiMixin, ViewSet):
 
         return ManifestResponse(manifest, path, request)
 
-    def get(self, request, path, pk=None):
+    def get(self, request, path, pk):
         """
         Responds to GET requests about manifests by reference
         :param request:
@@ -442,11 +650,14 @@ class Manifests(ContainerRegistryApiMixin, ViewSet):
         :param digest:
         :return:
         """
-        distribution, _, repository_version = self.get_drv_pull(path)
+        log.info("XOXOXOXOX")
+        log.info(path)
+        distribution, _, repository_version = get_drv_pull(path)
         if pk[:7] != "sha256:":
             tag = get_object_or_404(models.Tag, name=pk, pk__in=repository_version.content)
             manifest = tag.tagged_manifest
         else:
+            tag = None
             manifest = get_object_or_404(
                 models.Manifest, digest=pk, pk__in=repository_version.content
             )
@@ -465,7 +676,7 @@ class Manifests(ContainerRegistryApiMixin, ViewSet):
         :param pk:
         :return:
         """
-        _, repository = self.get_dr_push(request, path)
+        _, repository = get_dr_push(request, path)
         # iterate over all the layers and create
         chunk = request.META["wsgi.input"]
         artifact = self.receive_artifact(chunk)
