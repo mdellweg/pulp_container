@@ -27,13 +27,14 @@ from rest_framework.exceptions import (
     ParseError,
     ValidationError,
 )
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, SAFE_METHODS
 from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 from rest_framework.views import APIView
 
 from pulp_container.app import models, serializers
+from pulp_container.app.access_policy import RegistryAccessPolicy
 from pulp_container.app.authorization import AuthorizationService
 from pulp_container.app.redirects import FileStorageRedirects, S3StorageRedirects
 from pulp_container.app.token_verification import (
@@ -234,7 +235,7 @@ class ContainerRegistryApiMixin:
         List of permission classes to check for this view.
         """
         if settings.get("TOKEN_AUTH_DISABLED", False):
-            return [RegistryPermission]
+            return [RegistryAccessPolicy]
         return [TokenPermission]
 
     @property
@@ -364,6 +365,8 @@ class VersionView(ContainerRegistryApiMixin, APIView):
     Handles requests to the /v2/ endpoint.
     """
 
+    action = "ping"
+
     @property
     def permission_classes(self):
         """
@@ -372,6 +375,9 @@ class VersionView(ContainerRegistryApiMixin, APIView):
         if settings.get("TOKEN_AUTH_DISABLED", False):
             return [IsAuthenticated]
         return [TokenPermission]
+    def get_object(self):
+        """This is a fudge!"""
+        return None
 
     def get(self, request):
         """Handles GET requests for the /v2/ endpoint."""
@@ -382,6 +388,12 @@ class CatalogView(ContainerRegistryApiMixin, APIView):
     """
     Handles requests to the /v2/_catalog endpoint
     """
+
+    action = "catalog"
+
+    def get_object(self):
+        """This is a terrible fudge!"""
+        return models.ContainerDistribution()
 
     def get(self, request):
         """Handles GET requests for the /v2/_catalog endpoint."""
@@ -395,6 +407,16 @@ class TagsListView(ContainerRegistryApiMixin, APIView):
     """
     Handles requests to the /v2/<repo>/tags/list endpoint
     """
+
+    def get_object(self):
+        """This is a fudge!"""
+        return models.ContainerDistribution.objects.get(base_path=self.kwargs["path"])
+
+    def check_permissions(self, request):
+        """This is a fudge!"""
+        self.action = "pull" if request.method in SAFE_METHODS else "push"
+        super().check_permissions(request)
+        self.action = None
 
     def get(self, request, path):
         """
@@ -419,6 +441,16 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
     queryset = models.Upload.objects.all()
 
     content_range_pattern = re.compile(r"^(?P<start>\d+)-(?P<end>\d+)$")
+
+    def get_object(self):
+        """This is a fudge!"""
+        return models.ContainerDistribution.objects.get(base_path=self.kwargs["path"])
+
+    def check_permissions(self, request):
+        """This is a fudge!"""
+        self.action = "pull" if request.method in SAFE_METHODS else "push"
+        super().check_permissions(request)
+        self.action = None
 
     def create(self, request, path):
         """
@@ -535,6 +567,16 @@ class Blobs(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
 
     renderer_classes = [ContentRenderer]
 
+    def get_object(self):
+        """This is a fudge!"""
+        return models.ContainerDistribution.objects.get(base_path=self.kwargs["path"])
+
+    def check_permissions(self, request):
+        """This is a fudge!"""
+        self.action = "pull" if request.method in SAFE_METHODS else "push"
+        super().check_permissions(request)
+        self.action = None
+
     def head(self, request, path, pk=None):
         """
         Responds to HEAD requests about blobs
@@ -561,6 +603,19 @@ class Manifests(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
     renderer_classes = [ContentRenderer]
     # The lookup regex does not allow /, ^, &, *, %, !, ~, @, #, +, =, ?
     lookup_value_regex = "[^/^&*%!~@#+=?]+"
+
+    def get_object(self):
+        """This is a fudge!"""
+        try:
+            return models.ContainerDistribution.objects.get(base_path=self.kwargs["path"])
+        except models.ContainerDistribution.DoesNotExist:
+            raise ManifestNotFound(reference=self.kwargs["pk"])
+
+    def check_permissions(self, request):
+        """This is a fudge!"""
+        self.action = "pull" if request.method in SAFE_METHODS else "push"
+        super().check_permissions(request)
+        self.action = None
 
     def head(self, request, path, pk=None):
         """

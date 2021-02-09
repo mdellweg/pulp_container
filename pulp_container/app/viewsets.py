@@ -1150,6 +1150,11 @@ class ContainerNamespaceViewSet(
     DEFAULT_ACCESS_POLICY = {
         "statements": [
             {
+                "action": ["ping"],
+                "principal": ["*"],
+                "effect": "allow",
+            },
+            {
                 "action": ["list"],
                 "principal": "authenticated",
                 "effect": "allow",
