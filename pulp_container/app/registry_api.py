@@ -396,7 +396,7 @@ class CatalogView(ContainerRegistryApiMixin, APIView):
         try:
             return models.ContainerDistribution()
         except models.ContainerDistribution.DoesNotExist:
-            raise RepositoryNotFound(self.kwargs["path"])
+            return None
 
     def get(self, request):
         """Handles GET requests for the /v2/_catalog endpoint."""
@@ -416,7 +416,7 @@ class TagsListView(ContainerRegistryApiMixin, APIView):
         try:
             return models.ContainerDistribution.objects.get(base_path=self.kwargs["path"])
         except models.ContainerDistribution.DoesNotExist:
-            raise RepositoryNotFound(self.kwargs["path"])
+            return None
 
     def check_permissions(self, request):
         """This is a fudge!"""
@@ -453,7 +453,7 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
         try:
             return models.ContainerDistribution.objects.get(base_path=self.kwargs["path"])
         except models.ContainerDistribution.DoesNotExist:
-            raise RepositoryNotFound(self.kwargs["path"])
+            return None
 
     def check_permissions(self, request):
         """This is a fudge!"""
@@ -581,7 +581,7 @@ class Blobs(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
         try:
             return models.ContainerDistribution.objects.get(base_path=self.kwargs["path"])
         except models.ContainerDistribution.DoesNotExist:
-            raise RepositoryNotFound(self.kwargs["path"])
+            return None
 
     def check_permissions(self, request):
         """This is a fudge!"""
@@ -621,7 +621,7 @@ class Manifests(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
         try:
             return models.ContainerDistribution.objects.get(base_path=self.kwargs["path"])
         except models.ContainerDistribution.DoesNotExist:
-            raise ManifestNotFound(reference=self.kwargs["pk"])
+            return None
 
     def check_permissions(self, request):
         """This is a fudge!"""

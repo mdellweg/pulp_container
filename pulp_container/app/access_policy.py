@@ -76,10 +76,6 @@ class RegistryAccessPolicy(AccessPolicy, NamespaceAccessPolicyMixin):
             The access policy statements in drf-access-policy policy structure.
 
         """
-        access_policy_obj = AccessPolicyModel.objects.get(
-            viewset_name="distributions/container/container"
-        )
-        return access_policy_obj.statements
         if isinstance(view.get_object(), models.ContainerDistribution):
             access_policy_obj = AccessPolicyModel.objects.get(
                 viewset_name="distributions/container/container"
