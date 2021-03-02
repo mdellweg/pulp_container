@@ -14,12 +14,14 @@ from tempfile import NamedTemporaryFile
 from django.core.files.storage import default_storage as storage
 from django.core.files.base import ContentFile, File
 from django.db import IntegrityError, transaction
-from django.shortcuts import get_object_or_404
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404, redirect
 
 from django.conf import settings
 
-from pulpcore.plugin.models import Artifact, ContentArtifact, UploadChunk
+from pulpcore.plugin.models import Artifact, ContentArtifact, Task, UploadChunk
 from pulpcore.plugin.files import PulpTemporaryUploadedFile
+from pulpcore.plugin.tasking import add_and_remove, enqueue_with_reservation
 from rest_framework.exceptions import (
     AuthenticationFailed,
     NotAuthenticated,
@@ -50,6 +52,10 @@ from pulp_container.app.token_verification import (
 
 
 log = logging.getLogger(__name__)
+
+
+class HttpResponseTooManyRequests(HttpResponse):
+    status_code = 429
 
 
 class RepositoryNotFound(NotFound):
@@ -200,7 +206,6 @@ class BlobResponse(Response):
         artifact = blob._artifacts.get()
         size = artifact.size
 
-        log.info("digest: {digest}".format(digest=blob.digest))
         headers = {
             "Docker-Content-Digest": blob.digest,
             "Location": "/v2/{path}/blobs/{digest}".format(path=path, digest=blob.digest),
@@ -580,7 +585,29 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
         _, repository = self.get_dr_push(request, path)
 
         digest = request.query_params["digest"]
-        upload = models.Upload.objects.get(pk=pk, repository=repository)
+        try:
+            upload = models.Upload.objects.get(pk=pk, repository=repository)
+        except models.Upload.DoesNotExist as e_upload:
+            # Upload has been deleted => task has started or even finished
+            try:
+                task = Task.objects.filter(
+                    name__endswith="add_and_remove",
+                    reserved_resources_record__resource=f"upload:{pk}",
+                ).last()
+            except Task.DoesNotExist:
+                # No upload and no task for it return 404
+                raise e_upload
+
+            if task.state == "completed":
+                blob = models.Blob.objects.get(digest=digest)
+                return BlobResponse(blob, path, 201, request)
+            elif task.state in ["waiting", "running"]:
+                response = HttpResponseTooManyRequests()
+                response["Retry-After"] = 5
+                return response
+            else:
+                raise Exception("Failed.")
+
         chunks = UploadChunk.objects.filter(upload=upload).order_by("offset")
 
         with NamedTemporaryFile("ab") as temp_file:
@@ -609,12 +636,21 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
             except IntegrityError:
                 pass
 
-            with repository.new_version() as new_version:
-                new_version.add_content(models.Blob.objects.filter(pk=blob.pk))
-
             upload.delete()
 
-            return BlobResponse(blob, path, 201, request)
+            task = enqueue_with_reservation(
+                add_and_remove,
+                [f"upload:{pk}", repository, blob],
+                kwargs={
+                    "repository_pk": repository.pk,
+                    "add_content_units": [blob.pk],
+                    "remove_content_units": [],
+                },
+            )
+
+            response = HttpResponseTooManyRequests()
+            response["Retry-After"] = 5
+            return response
         else:
             raise Exception("The digest did not match")
 
